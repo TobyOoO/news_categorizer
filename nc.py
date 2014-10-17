@@ -2,15 +2,54 @@ from __future__ import division
 
 import sqlite3
 import math
+import re
 
 import tablib
+
+from nltk.stem.lancaster import LancasterStemmer
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 from nltk import FreqDist
+from nltk import pos_tag
+
 
 #DB init
 conn = sqlite3.connect('db.db')
 c = conn.cursor()
+
+#preprocess
+def preprocess(content):
+	stopset = set(stopwords.words('english'))
+	#replace punctuation and tag with space
+	tokens = word_tokenize(re.sub(r'<p>|</p>|[^A-Za-z ]', ' ', content.lower())) 
+	pos_list = pos_tag(tokens)
+	s_tokens = list()
+
+	#noun and verb only
+	for pos in pos_list:
+		#print pos[1]
+		if pos[1] in ['NN', 'NNS', 'VB', 'VBD', 'VBG', 'VBN', 'VBP', 'VBZ']:
+			s_tokens.append(pos[0])
+
+	wordfreq = FreqDist(s_tokens)
+	stemfreq = dict()
+	st = LancasterStemmer()
+	for word, freq in wordfreq.items():
+		#stopwords
+		if word in stopset:
+			del wordfreq[word]
+			continue
+		#tiny words
+		if len(word) <= 2:
+			del wordfreq[word]
+			continue
+		#stemmer
+		stem = st.stem(word)
+		try:
+			stemfreq[stem]+=freq
+		except:
+			stemfreq[stem]=freq
+	return stemfreq
 
 #class def
 
@@ -29,10 +68,7 @@ class Article:
 
 	def createWordFreq(self):
 		#preprocess
-		stopset = set(stopwords.words('english'))
-		tokens = word_tokenize(self.content.replace('<p>', '').replace('</p>', '').lower())
-		tokens=[w for w in tokens if not w in stopset]
-		self.wordfreq = FreqDist(tokens)
+		self.wordfreq = preprocess(self.content)
 
 	def commitWordFreq(self):
 		for word, freq in self.wordfreq.items():
@@ -167,7 +203,7 @@ class Calculator:
 
 
 
-def initTrainingArticle(start, end):
+def initTrainingArticle(start=0, end=400):
 	#for row in c.execute('SELECT * FROM article_cnn WHERE id >= 8'):
 	c.execute('SELECT * FROM article_cnn WHERE id BETWEEN ? AND ?',(start, end))
 	rows = c.fetchall()
@@ -176,10 +212,10 @@ def initTrainingArticle(start, end):
 		a = Article(_id=row[0], title=row[1], source=row[2], category=row[6], content=row[7], genre=0)
 		a.createWordFreq()
 		a.commitWordFreq()
-		print a.wordfreq
+		#print a.wordfreq
 		a = ''
 
-def initTestingArticle(start, end):
+def initTestingArticle(start=0, end=100):
 	#for row in c.execute('SELECT * FROM article_cnn WHERE id >= 8'):
 	c.execute('SELECT * FROM article_fox WHERE id BETWEEN ? AND ?',(start, end))
 	rows = c.fetchall()
@@ -188,20 +224,24 @@ def initTestingArticle(start, end):
 		a = Article(_id=row[0], title=row[1], source=row[2], category=row[6], content=row[7], genre=1)
 		a.createWordFreq()
 		a.commitWordFreq()
-		print a.wordfreq
+		#print a.wordfreq
 		a = ''
 	
-def initCategory(category_name):
-	c.execute('SELECT * FROM article_cnn WHERE category = ?',(category_name,))
-	rows = c.fetchall()
-	cate = Category(name=category_name)
-	for row in rows:
-		print row[1]
-		print row[6]
-		a = Article(_id=row[0], title=row[1], source=row[2], category=row[6], content=row[7], genre=0)
-		a.getWordFreq()
-		cate.appendArticle(a)
-	cate.commitCategory()
+def initCategory():
+	c.execute('SELECT name FROM category')
+	rs = c.fetchall()
+	for r in rs:
+		category_name = r[0]
+		c.execute('SELECT * FROM article_cnn WHERE category = ?',(category_name,))
+		rows = c.fetchall()
+		cate = Category(name=category_name)
+		for row in rows:
+			print row[1]
+			print row[6]
+			a = Article(_id=row[0], title=row[1], source=row[2], category=row[6], content=row[7], genre=0)
+			a.getWordFreq()
+			cate.appendArticle(a)
+		cate.commitCategory()
 
 def retrieveCategory():
 	c.execute('SELECT name FROM category')
@@ -240,8 +280,24 @@ def initExportEDistance():
 	cal.getEDistance()
 	cal.exportEDdistance(retrieveTestingArticle())
 
+def eraseRecords():
+	c.execute('DELETE FROM e_distance') #erase Table
+	c.execute('DELETE FROM wordfreq_category') #erase Table
+	c.execute('DELETE FROM wordfreq_testing') #erase Table
+	c.execute('DELETE FROM wordfreq_training') #erase Table
+	c.execute('VACUUM')
+	conn.commit()
 
-initExportEDistance()
+def deployPreprocess():
+	eraseRecords()
+	initTrainingArticle()
+	initTestingArticle()
+	initCategory()
+	initDistance()
+
+
+deployPreprocess()
+
 conn.commit()
 conn.close()
 print('YEAH!')
